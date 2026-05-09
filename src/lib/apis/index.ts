@@ -1,6 +1,7 @@
 import { WEBUI_BASE_URL } from '$lib/constants';
 import { convertOpenApiToToolPayload } from '$lib/utils';
 import { getOpenAIModelsDirect } from './openai';
+import { browserModelsAsModels } from '$lib/runtimes/browser/registry';
 
 const TOOL_SERVER_FETCH_TIMEOUT = 10000;
 
@@ -167,6 +168,17 @@ export const getModels = async (
 		}
 
 		models = Object.values(modelsMap);
+	}
+
+	if (!base) {
+		// Append in-browser runtime models (run locally via WebLLM/WebGPU,
+		// not via the backend). These are recognized by the chat send path
+		// via `model.browser === true` and the `browser:` id prefix.
+		const browserModels = browserModelsAsModels();
+		const existingIds = new Set(models.map((m: any) => m.id));
+		for (const m of browserModels) {
+			if (!existingIds.has(m.id)) models.push(m);
+		}
 	}
 
 	return models;

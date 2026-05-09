@@ -80,6 +80,10 @@
 		updateChatFolderIdById
 	} from '$lib/apis/chats';
 	import { generateOpenAIChatCompletion } from '$lib/apis/openai';
+	import {
+		browserChatCompletion,
+		interruptBrowserGeneration
+	} from '$lib/runtimes/browser';
 	import { processWeb, processWebSearch, processYoutubeVideo } from '$lib/apis/retrieval';
 	import { getAndUpdateUserLocation, getUserSettings } from '$lib/apis/users';
 	import {
@@ -173,6 +177,7 @@
 	};
 
 	let taskIds = null;
+	let browserGenerationActive = false;
 
 	// Chat Input
 	let prompt = '';
@@ -2229,6 +2234,83 @@
 			.map((token) => decodeURIComponent(JSON.parse(`"${token.replace(/"/g, '\\"')}"`)));
 	};
 
+	const runBrowserChatCompletion = async ({
+		model,
+		messages,
+		responseMessageId,
+		chatId: _chatId,
+		params
+	}: {
+		model: any;
+		messages: any[];
+		responseMessageId: string;
+		chatId: string | null | undefined;
+		params: any;
+	}) => {
+		browserGenerationActive = true;
+		let downloadStatus: any = null;
+
+		try {
+			const stopTokens = getStopTokens();
+
+			await browserChatCompletion({
+				modelId: model.id,
+				messages: messages,
+				temperature: $settings?.params?.temperature ?? params?.temperature,
+				top_p: $settings?.params?.top_p ?? params?.top_p,
+				max_tokens: $settings?.params?.max_tokens ?? params?.max_tokens,
+				stop: stopTokens && stopTokens.length > 0 ? stopTokens : undefined,
+				onProgress: (rep) => {
+					const msg = history.messages[responseMessageId];
+					if (!msg) return;
+					msg.statusHistory = msg.statusHistory ?? [];
+					if (!downloadStatus) {
+						downloadStatus = {
+							action: 'browser_load',
+							description: rep.text,
+							done: rep.progress >= 1
+						};
+						msg.statusHistory.push(downloadStatus);
+					} else {
+						downloadStatus.description = rep.text;
+						downloadStatus.done = rep.progress >= 1;
+					}
+					history.messages[responseMessageId] = msg;
+				},
+				onDelta: (chunk) => {
+					const msg = history.messages[responseMessageId];
+					if (!msg) return;
+					chatCompletionEventHandler(chunk, msg, _chatId);
+				},
+				onDone: ({ usage }) => {
+					const msg = history.messages[responseMessageId];
+					if (!msg) return;
+					chatCompletionEventHandler(
+						{
+							id: responseMessageId,
+							done: true,
+							usage,
+							choices: [{ delta: { content: '' }, finish_reason: 'stop' }]
+						},
+						msg,
+						_chatId
+					);
+				},
+				onError: (err: any) => {
+					const msg = history.messages[responseMessageId];
+					if (!msg) return;
+					msg.error = { content: String(err?.message ?? err) };
+					msg.done = true;
+					history.messages[responseMessageId] = msg;
+				}
+			});
+
+			return {};
+		} finally {
+			browserGenerationActive = false;
+		}
+	};
+
 	const sendMessageSocket = async (
 		model,
 		_messages,
@@ -2294,13 +2376,16 @@
 			true;
 		// Always include system prompt — backend extracts it and prepends to DB messages.
 		// Only temp chats need conversation messages (persisted chats load from DB).
+		// Browser-runtime models also need the full list since they bypass the
+		// backend entirely and have no DB to reconstruct from.
+		const _useBrowserRuntime = ($models.find((m) => m.id === model.id) as any)?.browser === true;
 		let messages = [
 			params?.system || $settings.system
 				? { role: 'system', content: `${params?.system ?? $settings?.system ?? ''}` }
 				: undefined
 		].filter(Boolean);
 
-		if ($temporaryChatEnabled) {
+		if ($temporaryChatEnabled || _useBrowserRuntime) {
 			messages = [
 				...messages,
 				..._messages.map((message) => ({
@@ -2400,7 +2485,15 @@
 		// Only send terminal_id if the model has terminal capability enabled
 		const terminalEnabled = model.info?.meta?.capabilities?.terminal ?? true;
 
-		const res = await generateOpenAIChatCompletion(
+		const res = _useBrowserRuntime
+			? await runBrowserChatCompletion({
+					model,
+					messages,
+					responseMessageId,
+					chatId: _chatId,
+					params
+				})
+			: await generateOpenAIChatCompletion(
 			localStorage.token,
 			{
 				stream: stream,
@@ -2576,7 +2669,14 @@
 	};
 
 	const stopResponse = async (processQueue = true) => {
-		if (taskIds) {
+		if (browserGenerationActive) {
+			interruptBrowserGeneration();
+			const responseMessage = history.messages[history.currentId];
+			if (responseMessage) {
+				responseMessage.done = true;
+				history.messages[history.currentId] = responseMessage;
+			}
+		} else if (taskIds) {
 			if ($chatId) {
 				await stopTasksByChatId(localStorage.token, $chatId).catch((error) => {
 					toast.error(`${error}`);
