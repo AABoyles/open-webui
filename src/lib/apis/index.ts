@@ -1,7 +1,7 @@
 import { WEBUI_BASE_URL } from '$lib/constants';
 import { convertOpenApiToToolPayload } from '$lib/utils';
 import { getOpenAIModelsDirect } from './openai';
-import { browserModelsAsModels } from '$lib/runtimes/browser/registry';
+import { browserModelsAsModels, getBrowserModelEntry } from '$lib/runtimes/browser/registry';
 
 const TOOL_SERVER_FETCH_TIMEOUT = 10000;
 
@@ -176,8 +176,12 @@ export const getModels = async (
 		// via `model.browser === true` and the `browser:` id prefix.
 		const browserModels = browserModelsAsModels();
 		const existingIds = new Set(models.map((m: any) => m.id));
+		const webgpuAvailable = typeof navigator !== 'undefined' && !!(navigator as any).gpu;
 		for (const m of browserModels) {
-			if (!existingIds.has(m.id)) models.push(m);
+			if (existingIds.has(m.id)) continue;
+			// WebLLM models are WebGPU-only compiled bytecode — hide them on devices without WebGPU.
+			if (!webgpuAvailable && getBrowserModelEntry(m.id)?.runtime === 'webllm') continue;
+			models.push(m);
 		}
 	}
 

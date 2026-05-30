@@ -70,6 +70,7 @@
 
 	import {
 		archiveChatById,
+		addTagById,
 		createNewChat,
 		deleteChatById,
 		getAllTags,
@@ -89,6 +90,8 @@
 	import { getAndUpdateUserLocation, getUserSettings } from '$lib/apis/users';
 	import {
 		generateQueries,
+		generateTitle,
+		generateTags,
 		chatAction,
 		generateMoACompletion,
 		stopTask,
@@ -2305,6 +2308,92 @@
 					history.messages[responseMessageId] = msg;
 				}
 			});
+
+			// Backend persistence doesn't run for browser-runtime chats, so save here.
+			if (!$temporaryChatEnabled) {
+				const isNewChat = !chat;
+				const savedChatId = isNewChat
+					? await initChatHandler(history)
+					: ($chatId as string);
+				if (!isNewChat) await saveChatHandler(savedChatId, history);
+
+				// Fire-and-forget: title + tag generation on the first exchange only,
+				// using the first available backend model (browser models can't run server-side).
+				if (isNewChat) {
+					const backendModel = $models.find((m: any) => !m.browser)?.id as string | undefined;
+					const currentMessages = createMessagesList(history, history.currentId);
+
+					if (backendModel && savedChatId) {
+						if ($settings?.title?.auto ?? true) {
+							generateTitle(localStorage.token, backendModel, currentMessages, savedChatId)
+								.then(async (title) => {
+									if (!title) return;
+									await updateChatById(localStorage.token, savedChatId, { title });
+									chatTitle.set(title);
+									currentChatPage.set(1);
+									chats.set(await getChatList(localStorage.token, $currentChatPage));
+								})
+								.catch(console.error);
+						}
+
+						if ($settings?.autoTags ?? true) {
+							generateTags(localStorage.token, backendModel, currentMessages as any, savedChatId)
+								.then(async (tags) => {
+									if (!tags?.length) return;
+									await Promise.all(
+										tags.map((tag: any) =>
+											addTagById(
+												localStorage.token,
+												savedChatId,
+												typeof tag === 'string' ? tag : (tag.name ?? String(tag))
+											)
+										)
+									);
+									chat = await getChatById(localStorage.token, savedChatId);
+									allTags.set(await getAllTags(localStorage.token));
+								})
+								.catch(console.error);
+						}
+					} else if (savedChatId && ($settings?.title?.auto ?? true)) {
+						// No backend model available — ask the browser model itself for a title.
+						// max_tokens=15 keeps it fast; model is already loaded so no download delay.
+						const titlePrompt = [
+							...currentMessages.map((m: any) => ({
+								role: m.role,
+								content: typeof m.content === 'string' ? m.content : extractTextContent(m.content)
+							})),
+							{
+								role: 'user',
+								content:
+									'Give this conversation a short title of five words or fewer. Reply with only the title, no punctuation or quotes.'
+							}
+						];
+						let titleAccum = '';
+						browserChatCompletion({
+							modelId: model.id,
+							messages: titlePrompt,
+							max_tokens: 20,
+							temperature: 0.3,
+							onDelta: (chunk: any) => {
+								titleAccum += chunk?.choices?.[0]?.delta?.content ?? '';
+							},
+							onDone: async () => {
+								const title = titleAccum
+									.trim()
+									.replace(/^['"*#\s]+|['"*#\s]+$/g, '')
+									.split('\n')[0]
+									.slice(0, 60);
+								if (!title) return;
+								await updateChatById(localStorage.token, savedChatId, { title });
+								chatTitle.set(title);
+								currentChatPage.set(1);
+								chats.set(await getChatList(localStorage.token, $currentChatPage));
+							},
+							onError: () => {}
+						}).catch(() => {});
+					}
+				}
+			}
 
 			return {};
 		} finally {

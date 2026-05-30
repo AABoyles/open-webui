@@ -1,0 +1,47 @@
+# Dev backend for the forked OpenWebUI frontend.
+#
+# Usage:
+#   docker compose -f docker-compose.dev.yml up -d   # start backend on :8080
+#   npm run dev                                       # frontend on :5173
+#
+# Browse to http://localhost:5173 (or http://aibox.local:5173 from another
+# machine on the LAN). The frontend hits ${hostname}:8080 in dev mode, so the
+# backend MUST be reachable on the same hostname you load the frontend from.
+#
+# Data lives in ./.dev-backend-data — gitignored, throwaway. Login form is
+# enabled and signup is open so you can create a local admin in two clicks
+# without involving Authelia.
+
+services:
+  open-webui-dev:
+    image: openwebui/open-webui:0.9-cuda126
+    container_name: open-webui-dev
+    restart: unless-stopped
+    ports:
+      - '8080:8080'
+    environment:
+      WEBUI_SECRET_KEY: dev-only-not-for-prod
+      ENABLE_LOGIN_FORM: 'true'
+      ENABLE_SIGNUP: 'true'
+      WEBUI_AUTH: 'true'
+      ENABLE_OLLAMA_API: 'false'
+      # CORS: dev frontend runs on a different port than this backend.
+      CORS_ALLOW_ORIGIN: '*'
+      # Disable RAG / web search / etc. that need extra backends. Add back as
+      # needed when you want to test those code paths.
+      RAG_EMBEDDING_ENGINE: ''
+      ENABLE_RAG_WEB_SEARCH: 'false'
+      # ── Optional: route real models through aibox's litellm so they show up
+      # in the model picker alongside browser:* models. Uncomment all four
+      # lines + the networks block below, and export LITELLM_MASTER_KEY first.
+      # OPENAI_API_BASE_URL: http://litellm:4000/v1
+      # OPENAI_API_KEY: ${LITELLM_MASTER_KEY}
+    volumes:
+      - ./.dev-backend-data:/app/backend/data
+    # networks:
+    #   - aibox
+
+# networks:
+#   aibox:
+#     name: aibox_aibox
+#     external: true
