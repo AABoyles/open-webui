@@ -278,9 +278,7 @@ export const sanitizeHistory = (history) => {
 
 	// Prune childrenIds referencing deleted/missing nodes
 	for (const message of Object.values(history.messages)) {
-		message.childrenIds = message.childrenIds.filter(
-			(childId) => history.messages[childId]
-		);
+		message.childrenIds = message.childrenIds.filter((childId) => history.messages[childId]);
 	}
 
 	// Recover currentId if it points to a missing or incomplete node
@@ -289,10 +287,7 @@ export const sanitizeHistory = (history) => {
 		let latestLeafId = null;
 		let latestTimestamp = -1;
 		for (const [id, message] of Object.entries(history.messages)) {
-			if (
-				message.childrenIds.length === 0 &&
-				(message.timestamp ?? 0) > latestTimestamp
-			) {
+			if (message.childrenIds.length === 0 && (message.timestamp ?? 0) > latestTimestamp) {
 				latestLeafId = id;
 				latestTimestamp = message.timestamp ?? 0;
 			}
@@ -1764,7 +1759,42 @@ export const parseJsonValue = (value: string): any => {
 	return value;
 };
 
+type ReadableStreamWithAsyncIterator<T> = ReadableStream<T> & {
+	[Symbol.asyncIterator]?: () => AsyncIterableIterator<T>;
+};
+
+function ensureReadableStreamAsyncIterator() {
+	if (typeof ReadableStream === 'undefined') {
+		return;
+	}
+
+	const prototype = ReadableStream.prototype as ReadableStreamWithAsyncIterator<unknown>;
+	if (prototype[Symbol.asyncIterator]) {
+		return;
+	}
+
+	Object.defineProperty(prototype, Symbol.asyncIterator, {
+		value: async function* (this: ReadableStream<unknown>) {
+			const reader = this.getReader();
+			try {
+				while (true) {
+					const { done, value } = await reader.read();
+					if (done) {
+						return;
+					}
+					yield value;
+				}
+			} finally {
+				reader.releaseLock();
+			}
+		},
+		configurable: true,
+		writable: true
+	});
+}
+
 async function ensurePDFjsLoaded() {
+	ensureReadableStreamAsyncIterator();
 	if (!window.pdfjsLib) {
 		const pdfjs = await import('pdfjs-dist');
 		pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;

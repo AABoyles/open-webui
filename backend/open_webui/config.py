@@ -946,6 +946,15 @@ log.info(f'VECTOR_DB: {VECTOR_DB}')
 S3_VECTOR_BUCKET_NAME = os.getenv('S3_VECTOR_BUCKET_NAME', None)
 S3_VECTOR_REGION = os.getenv('S3_VECTOR_REGION', None)
 
+# Valkey Vector Store
+VALKEY_URL = os.getenv('VALKEY_URL', '')
+VALKEY_COLLECTION_PREFIX = os.getenv('VALKEY_COLLECTION_PREFIX', 'open_webui')
+VALKEY_INDEX_TYPE = os.getenv('VALKEY_INDEX_TYPE', 'HNSW').upper()
+VALKEY_DISTANCE_METRIC = os.getenv('VALKEY_DISTANCE_METRIC', 'COSINE').upper()
+VALKEY_HNSW_M = int(os.getenv('VALKEY_HNSW_M', '16'))
+VALKEY_HNSW_EF_CONSTRUCTION = int(os.getenv('VALKEY_HNSW_EF_CONSTRUCTION', '200'))
+VALKEY_HNSW_EF_RUNTIME = int(os.getenv('VALKEY_HNSW_EF_RUNTIME', '10'))
+
 ####################################
 # Information Retrieval (RAG)
 ####################################
@@ -3437,6 +3446,12 @@ ENABLE_OAUTH_SIGNUP = ConfigVar(
     'ENABLE_OAUTH_SIGNUP',
     'oauth.enable_signup',
     os.getenv('ENABLE_OAUTH_SIGNUP', 'False').lower() == 'true',
+)
+
+OAUTH_AUTO_REDIRECT = ConfigVar(
+    'OAUTH_AUTO_REDIRECT',
+    'oauth.auto_redirect',
+    os.getenv('OAUTH_AUTO_REDIRECT', 'False').lower() == 'true',
 )
 
 OAUTH_REFRESH_TOKEN_INCLUDE_SCOPE = ConfigVar(

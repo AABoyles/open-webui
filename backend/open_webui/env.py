@@ -545,6 +545,15 @@ else:
     except Exception:
         AIOHTTP_CLIENT_TIMEOUT_TOOL_SERVER = AIOHTTP_CLIENT_TIMEOUT
 
+# Timeout (in seconds) for the MCP session.initialize() handshake.
+# The handshake performs a list-tools round-trip and can take tens of
+# seconds on cold-start servers or servers exposing many tools.
+MCP_INITIALIZE_TIMEOUT = os.getenv('MCP_INITIALIZE_TIMEOUT', '10')
+try:
+    MCP_INITIALIZE_TIMEOUT = int(MCP_INITIALIZE_TIMEOUT)
+except (ValueError, TypeError):
+    MCP_INITIALIZE_TIMEOUT = 10
+
 
 ####################################
 # AIOHTTP Connection Pool
@@ -672,6 +681,12 @@ PASSWORD_VALIDATION_HINT = os.getenv('PASSWORD_VALIDATION_HINT', '')
 BYPASS_MODEL_ACCESS_CONTROL = os.getenv('BYPASS_MODEL_ACCESS_CONTROL', 'False').lower() == 'true'
 BYPASS_RETRIEVAL_ACCESS_CONTROL = os.getenv('BYPASS_RETRIEVAL_ACCESS_CONTROL', 'False').lower() == 'true'
 
+# When True, collection names that do not match any known file-*, user-memory-*,
+# web-search-*, or knowledge-base collection are allowed through access control
+# for non-admin users.  When False (default), unknown collection names are
+# denied — closing the legacy unscoped namespace.
+ENABLE_RETRIEVAL_UNSCOPED_COLLECTIONS = os.getenv('ENABLE_RETRIEVAL_UNSCOPED_COLLECTIONS', 'False').lower() == 'true'
+
 # When enabled, skips pydub-based preprocessing (format conversion, compression,
 # and chunked splitting) before sending files to processing engines. Useful when
 # the upstream provider handles these steps or when ffmpeg is unavailable.
@@ -780,6 +795,11 @@ PROFILE_IMAGE_ALLOWED_MIME_TYPES = frozenset(
     if t.strip()
 )
 
+# Max stored length (bytes) of a data:image profile URI; bounds Postgres/Redis
+# bloat from inline avatars and model icons. Unset (default) disables the cap.
+_profile_image_max_data_uri_size = os.getenv('PROFILE_IMAGE_MAX_DATA_URI_SIZE', '').strip()
+PROFILE_IMAGE_MAX_DATA_URI_SIZE = int(_profile_image_max_data_uri_size) if _profile_image_max_data_uri_size else None
+
 ####################################
 # Forward Headers
 ####################################
@@ -792,6 +812,17 @@ FORWARD_USER_INFO_HEADER_USER_EMAIL = os.getenv('FORWARD_USER_INFO_HEADER_USER_E
 FORWARD_USER_INFO_HEADER_USER_ROLE = os.getenv('FORWARD_USER_INFO_HEADER_USER_ROLE', 'X-OpenWebUI-User-Role')
 FORWARD_SESSION_INFO_HEADER_MESSAGE_ID = os.getenv('FORWARD_SESSION_INFO_HEADER_MESSAGE_ID', 'X-OpenWebUI-Message-Id')
 FORWARD_SESSION_INFO_HEADER_CHAT_ID = os.getenv('FORWARD_SESSION_INFO_HEADER_CHAT_ID', 'X-OpenWebUI-Chat-Id')
+
+# If set while ENABLE_FORWARD_USER_INFO_HEADERS is True, send one signed HS256 JWT
+# (FORWARD_USER_INFO_HEADER_JWT) instead of separate X-OpenWebUI-User-* headers.
+FORWARD_USER_INFO_HEADER_JWT_SECRET = (os.environ.get('FORWARD_USER_INFO_HEADER_JWT_SECRET') or '').strip() or None
+FORWARD_USER_INFO_HEADER_JWT = os.environ.get('FORWARD_USER_INFO_HEADER_JWT', 'X-OpenWebUI-User-Jwt')
+try:
+    FORWARD_USER_INFO_HEADER_JWT_EXPIRES_SECONDS = int(
+        os.environ.get('FORWARD_USER_INFO_HEADER_JWT_EXPIRES_SECONDS', '300')
+    )
+except ValueError:
+    FORWARD_USER_INFO_HEADER_JWT_EXPIRES_SECONDS = 300
 
 ####################################
 # Progressive Web App

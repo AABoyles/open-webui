@@ -9,6 +9,7 @@ from open_webui.constants import ERROR_MESSAGES
 from open_webui.internal.db import get_async_session
 from open_webui.models.memories import Memories, MemoryModel
 from open_webui.retrieval.vector.async_client import ASYNC_VECTOR_DB_CLIENT
+from open_webui.config import RAG_EMBEDDING_QUERY_PREFIX
 from open_webui.utils.access_control import has_permission
 from open_webui.utils.auth import get_verified_user
 from pydantic import BaseModel
@@ -62,7 +63,9 @@ class MemoryUpdateModel(BaseModel):
 
 @router.post('/add', response_model=MemoryModel | None)
 async def add_memory(
-    request: Request, form_data: AddMemoryForm, user=Depends(get_verified_user),
+    request: Request,
+    form_data: AddMemoryForm,
+    user=Depends(get_verified_user),
 ):
     """Persist a new memory and embed it into the user's vector collection.
 
@@ -137,7 +140,7 @@ async def query_memory(
     if not memories:
         raise HTTPException(status_code=404, detail='No memories found for user')
 
-    vector = await request.app.state.EMBEDDING_FUNCTION(form_data.content, user=user)
+    vector = await request.app.state.EMBEDDING_FUNCTION(form_data.content, RAG_EMBEDDING_QUERY_PREFIX, user=user)
 
     results = await ASYNC_VECTOR_DB_CLIENT.search(
         collection_name=f'user-memory-{user.id}',

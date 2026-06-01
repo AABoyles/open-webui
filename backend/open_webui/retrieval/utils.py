@@ -31,6 +31,7 @@ from open_webui.env import (
     AIOHTTP_CLIENT_TIMEOUT,
     BYPASS_RETRIEVAL_ACCESS_CONTROL,
     ENABLE_FORWARD_USER_INFO_HEADERS,
+    ENABLE_RETRIEVAL_UNSCOPED_COLLECTIONS,
     OFFLINE_MODE,
 )
 from open_webui.models.access_grants import AccessGrants
@@ -926,6 +927,13 @@ def get_embedding_function(
     concurrent_requests=0,
 ) -> Awaitable:
     if embedding_engine == '':
+        if embedding_function is None:
+            raise ValueError(
+                'No embedding model is loaded. Set RAG_EMBEDDING_MODEL to a valid '
+                'SentenceTransformer model name, or configure an external '
+                'RAG_EMBEDDING_ENGINE (ollama, openai, azure_openai).'
+            )
+
         # Sentence transformers: CPU-bound sync operation
         async def async_embedding_function(query, prefix=None, user=None):
             return await asyncio.to_thread(
@@ -1065,6 +1073,16 @@ def get_reranking_function(reranking_engine, reranking_model, reranking_function
         )
 
 
+# UUIDs, SHA-256 digests, and prefixed variants thereof all fit [A-Za-z0-9_-].
+# Anything else cannot be a real Open WebUI collection and could break out of
+# a Milvus expression literal.
+_SAFE_COLLECTION_NAME_RE = re.compile(r'^[A-Za-z0-9_-]{1,255}$')
+
+
+def _is_safe_collection_name(name: str) -> bool:
+    return isinstance(name, str) and bool(_SAFE_COLLECTION_NAME_RE.match(name))
+
+
 async def filter_accessible_collections(
     collection_names: set[str],
     user: UserModel,
@@ -1074,20 +1092,33 @@ async def filter_accessible_collections(
     Return only the collection names the user is allowed to access.
     Admins bypass all checks.  For non-admins the policy is:
 
+      - any name with characters outside [A-Za-z0-9_-] → rejected
       - file-*          → validated via has_access_to_file
       - user-memory-*   → must match user's own memory collection
       - web-search-*    → ephemeral per-query collections, always allowed
       - knowledge-bases → always denied (system meta-collection)
       - everything else → if the name matches a knowledge base, validated
                           via Knowledges.check_access_by_user_id; if no
-                          such KB exists, the name is treated as an
-                          ephemeral/legacy collection and allowed
+                          such KB exists, denied by default.  When
+                          ENABLE_RETRIEVAL_UNSCOPED_COLLECTIONS is True,
+                          the name is treated as a legacy/ephemeral
+                          collection and allowed.
     """
+    # Applied before the admin bypass — malformed names should never reach the vector store.
+    safe_names = {n for n in collection_names if _is_safe_collection_name(n)}
+    rejected = collection_names - safe_names
+    if rejected:
+        log.warning(
+            'filter_accessible_collections: rejected %d collection name(s) with unsafe characters (user_id=%s)',
+            len(rejected),
+            getattr(user, 'id', '<unknown>'),
+        )
+
     if user.role == 'admin':
-        return collection_names
+        return safe_names
 
     validated = set()
-    for name in collection_names:
+    for name in safe_names:
         if name == 'knowledge-bases':
             # System meta-collection — never exposed to non-admins.
             continue
@@ -1106,11 +1137,13 @@ async def filter_accessible_collections(
         else:
             # May be a knowledge-base ID or a legacy/ephemeral collection.
             # If it IS a KB, enforce access control.  If no such KB
-            # exists, treat it as a non-sensitive collection (e.g. legacy
-            # model knowledge, process_text SHA256 collections) and allow.
+            # exists, the behaviour depends on
+            # ENABLE_RETRIEVAL_UNSCOPED_COLLECTIONS:
+            #   False (default) — deny (closes the unscoped namespace)
+            #   True  — allow (preserves legacy behaviour)
             if await Knowledges.check_access_by_user_id(name, user.id, permission=access_type):
                 validated.add(name)
-            elif not await Knowledges.get_knowledge_by_id(name):
+            elif ENABLE_RETRIEVAL_UNSCOPED_COLLECTIONS and not await Knowledges.get_knowledge_by_id(name):
                 # Not a KB at all — legacy/ephemeral collection, allow
                 validated.add(name)
     return validated
@@ -1330,10 +1363,7 @@ async def get_sources_from_items(
                             files = await Knowledges.get_files_by_id(knowledge_base.id)
                             owned_names = {f'file-{f.id}' for f in files}
                             owned_names.add(knowledge_base.id)
-                            valid_names = [
-                                n for n in (item.get('collection_names') or [])
-                                if n in owned_names
-                            ]
+                            valid_names = [n for n in (item.get('collection_names') or []) if n in owned_names]
                             collection_names = valid_names if valid_names else [knowledge_base.id]
                     else:
                         collection_names.append(item['id'])
@@ -1349,8 +1379,7 @@ async def get_sources_from_items(
                 collection_names.append(item['collection_name'])
             else:
                 log.debug(
-                    "get_sources_from_items: ignoring untrusted direct "
-                    "collection_name '%s' on item without type",
+                    "get_sources_from_items: ignoring untrusted direct collection_name '%s' on item without type",
                     item.get('collection_name'),
                 )
         elif item.get('collection_names'):
@@ -1358,8 +1387,7 @@ async def get_sources_from_items(
                 collection_names.extend(item['collection_names'])
             else:
                 log.debug(
-                    "get_sources_from_items: ignoring untrusted direct "
-                    "collection_names on item without type",
+                    'get_sources_from_items: ignoring untrusted direct collection_names on item without type',
                 )
 
         # If query_result is None

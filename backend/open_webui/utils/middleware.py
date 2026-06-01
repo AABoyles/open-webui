@@ -18,7 +18,7 @@ from uuid import uuid4
 
 from aiocache import cached
 from fastapi import HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from open_webui.config import (
     CACHE_DIR,
     CODE_INTERPRETER_BLOCKED_MODULES,
@@ -72,7 +72,7 @@ from open_webui.socket.main import (
     get_event_call,
     get_event_emitter,
 )
-from open_webui.utils.access_control import has_connection_access
+from open_webui.utils.access_control import has_connection_access, has_permission
 from open_webui.utils.access_control.files import get_accessible_folder_files
 from open_webui.utils.chat import generate_chat_completion
 from open_webui.utils.code_interpreter import execute_code_jupyter
@@ -1332,7 +1332,8 @@ async def chat_completion_tools_handler(
 
                 tool_function_name = tool_call.get('name', None)
                 if tool_function_name not in tools:
-                    return body, {}
+                    log.warning(f'Tool "{tool_function_name}" not found')
+                    return
 
                 tool_function_params = tool_call.get('parameters', {})
 
@@ -1519,6 +1520,18 @@ async def chat_web_search_handler(request: Request, form_data: dict, extra_param
             },
             user,
         )
+
+        # generate_queries returns a JSONResponse on error (e.g. model not
+        # found, chat completion failure).  Extract the error detail and
+        # re-raise so the outer except block falls back to using the raw
+        # user message as the search query.
+        if isinstance(res, JSONResponse):
+            try:
+                error_body = json.loads(res.body)
+                detail = error_body.get('detail', 'Query generation failed')
+            except Exception:
+                detail = 'Query generation failed'
+            raise Exception(detail)
 
         response = res['choices'][0]['message']['content']
 
@@ -1850,6 +1863,15 @@ async def chat_image_generation_handler(request: Request, form_data: dict, extra
                     },
                     user,
                 )
+
+                # Handle JSONResponse from error paths
+                if isinstance(res, JSONResponse):
+                    try:
+                        error_body = json.loads(res.body)
+                        detail = error_body.get('detail', 'Image prompt generation failed')
+                    except Exception:
+                        detail = 'Image prompt generation failed'
+                    raise Exception(detail)
 
                 response = res['choices'][0]['message']['content']
 
@@ -2221,19 +2243,18 @@ def extract_skill_ids_from_messages(messages: list[dict]) -> set[str]:
 
 
 def strip_skill_mentions(messages: list[dict]) -> None:
-    """Strip <$skillId|label> mention tags from message content in-place."""
-    strip_re = re.compile(r'<\$[^>]+>')
+    """Replace <$skillId|label> mention tags with the label in message content in-place."""
+    strip_re = re.compile(r'<\$[^|>]+\|?([^>]*)>')
     for message in messages:
         content = message.get('content')
         if isinstance(content, str) and strip_re.search(content):
-            message['content'] = strip_re.sub('', content).strip()
+            message['content'] = strip_re.sub(r'\1', content).strip()
         elif isinstance(content, list):
             for part in content:
                 if isinstance(part, dict) and part.get('type') == 'text':
                     text = part.get('text', '')
                     if strip_re.search(text):
-                        part['text'] = strip_re.sub('', text).strip()
-
+                        part['text'] = strip_re.sub(r'\1', text).strip()
 
 
 async def connect_mcp_server(
@@ -2249,10 +2270,7 @@ async def connect_mcp_server(
     """
     mcp_server_connection = None
     for server_connection in request.app.state.config.TOOL_SERVER_CONNECTIONS:
-        if (
-            server_connection.get('type', '') == 'mcp'
-            and server_connection.get('info', {}).get('id') == server_id
-        ):
+        if server_connection.get('type', '') == 'mcp' and server_connection.get('info', {}).get('id') == server_id:
             mcp_server_connection = server_connection
             break
 
@@ -2265,8 +2283,12 @@ async def connect_mcp_server(
         return None
 
     headers, _ = await build_tool_server_headers(
-        mcp_server_connection, request, user,
-        server_id=server_id, metadata=metadata, extra_params=extra_params,
+        mcp_server_connection,
+        request,
+        user,
+        server_id=server_id,
+        metadata=metadata,
+        extra_params=extra_params,
     )
 
     client = MCPClient()
@@ -2275,18 +2297,13 @@ async def connect_mcp_server(
         headers=headers if headers else None,
     )
 
-    function_name_filter_list = mcp_server_connection.get('config', {}).get(
-        'function_name_filter_list', ''
-    )
+    function_name_filter_list = mcp_server_connection.get('config', {}).get('function_name_filter_list', '')
     if isinstance(function_name_filter_list, str):
         function_name_filter_list = function_name_filter_list.split(',')
 
     tool_specs = await client.list_tool_specs()
     if function_name_filter_list:
-        tool_specs = [
-            spec for spec in tool_specs
-            if is_string_allowed(spec['name'], function_name_filter_list)
-        ]
+        tool_specs = [spec for spec in tool_specs if is_string_allowed(spec['name'], function_name_filter_list)]
 
     return client, tool_specs
 
@@ -2645,6 +2662,16 @@ async def process_chat_payload(request, form_data, user, metadata, model):
     strip_skill_mentions(form_data.get('messages', []))
 
     prompt = get_last_user_message(form_data['messages'])
+
+    # Guard against empty user message after skill mention stripping.
+    # When a user selects a skill ($skill-name) without typing additional text,
+    # the stripped result is an empty string which causes 400 errors on providers
+    # that reject empty content blocks (e.g. AWS Bedrock ConverseStream).
+    if not prompt or not prompt.strip():
+        fallback = ', '.join(s.name for s in available_skills)
+        if fallback:
+            set_last_user_message_content(fallback, form_data['messages'])
+            prompt = fallback
     # TODO: re-enable URL extraction from prompt
     # urls = []
     # if prompt and len(prompt or "") < 500 and (not files or len(files) == 0):
@@ -2698,10 +2725,14 @@ async def process_chat_payload(request, form_data, user, metadata, model):
             for tool_id in tool_ids:
                 if tool_id.startswith('server:mcp:'):
                     try:
-                        server_id = tool_id[len('server:mcp:'):]
+                        server_id = tool_id[len('server:mcp:') :]
 
                         result = await connect_mcp_server(
-                            request, server_id, user, metadata, extra_params,
+                            request,
+                            server_id,
+                            user,
+                            metadata,
+                            extra_params,
                         )
                         if result is None:
                             continue
@@ -2710,6 +2741,7 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                         mcp_clients[server_id] = client
 
                         for tool_spec in tool_specs:
+
                             async def make_tool_function(client, function_name):
                                 async def tool_function(**kwargs):
                                     return await client.call_tool(
@@ -3010,6 +3042,10 @@ async def get_system_oauth_token(request, user):
             from open_webui.models.oauth_sessions import OAuthSessions
 
             sessions = await OAuthSessions.get_sessions_by_user_id(user.id)
+            # Filter out MCP-provider sessions — their token refresh is handled
+            # separately by oauth_client_manager.  Passing them to the SSO
+            # oauth_manager causes a failed refresh and session deletion (#24618).
+            sessions = [s for s in sessions if not (s.provider or '').startswith('mcp:')]
             if sessions:
                 best = max(sessions, key=lambda s: s.updated_at)
                 oauth_token = await request.app.state.oauth_manager.get_oauth_token(
@@ -3038,7 +3074,10 @@ async def background_tasks_handler(ctx):
         and not metadata.get('chat_id', '').startswith('channel:')
     ):
         messages_map = await Chats.get_messages_map_by_chat_id(metadata['chat_id'])
-        message = messages_map.get(metadata['message_id']) if messages_map else None
+        if not messages_map:
+            # Chat was deleted while the response was streaming — skip background tasks
+            return
+        message = messages_map.get(metadata['message_id'])
 
         message_list = get_message_list(messages_map, metadata['message_id'])
 
@@ -3352,13 +3391,22 @@ async def outlet_filter_handler(ctx):
                     outlet_message_id = message.get('id')
                     if outlet_message_id and outlet_message_id in messages_map:
                         original_message = messages_map[outlet_message_id]
-                        if original_message.get('content') != message.get('content'):
+                        content_changed = original_message.get('content') != message.get('content')
+                        output_changed = message.get('output') and message.get('output') != original_message.get(
+                            'output'
+                        )
+                        if content_changed or output_changed:
+                            # If output was modified, re-derive content from it
+                            new_content = message.get('content', original_message.get('content', ''))
+                            if output_changed:
+                                new_content = serialize_output(message['output'])
                             await Chats.upsert_message_to_chat_by_id_and_message_id(
                                 chat_id,
                                 outlet_message_id,
                                 {
-                                    'content': message['content'],
+                                    'content': new_content,
                                     'originalContent': original_message.get('content'),
+                                    **({'output': message['output']} if output_changed else {}),
                                 },
                             )
 
@@ -3499,13 +3547,13 @@ async def non_streaming_chat_response_handler(response, ctx):
                                 },
                             )
 
-                    await background_tasks_handler(ctx)
                     ctx['assistant_message'] = {
                         'content': content,
                         'output': response_output,
                         **({'usage': usage} if usage else {}),
                     }
                     await outlet_filter_handler(ctx)
+                    await background_tasks_handler(ctx)
 
             response = build_response_object(response, merge_events_into_response(response_data, events))
         except Exception as e:
@@ -3824,7 +3872,26 @@ async def streaming_chat_response_handler(response, ctx):
 
             reasoning_tags_param = metadata.get('params', {}).get('reasoning_tags')
             DETECT_REASONING_TAGS = reasoning_tags_param is not False
-            DETECT_CODE_INTERPRETER = metadata.get('features', {}).get('code_interpreter', False)
+
+            # Mirror the five gates from utils/tools.py get_builtin_tools so the
+            # legacy XML-tag path enforces the same authz as native FC.
+            features = metadata.get('features', {}) or {}
+            model_capabilities = model.get('info', {}).get('meta', {}).get('capabilities') or {}
+            builtin_tools_meta = model.get('info', {}).get('meta', {}).get('builtinTools', {})
+            DETECT_CODE_INTERPRETER = (
+                bool(features.get('code_interpreter'))
+                and builtin_tools_meta.get('code_interpreter', True)
+                and getattr(request.app.state.config, 'ENABLE_CODE_INTERPRETER', True)
+                and model_capabilities.get('code_interpreter', True)
+                and (
+                    getattr(user, 'role', None) == 'admin'
+                    or await has_permission(
+                        getattr(user, 'id', ''),
+                        'features.code_interpreter',
+                        request.app.state.config.USER_PERMISSIONS,
+                    )
+                )
+            )
 
             reasoning_tags = []
             if DETECT_REASONING_TAGS:
@@ -4336,7 +4403,9 @@ async def streaming_chat_response_handler(response, ctx):
                                             if end:
                                                 break
 
-                                        if ENABLE_REALTIME_CHAT_SAVE and not metadata.get('chat_id', '').startswith('channel:'):
+                                        if ENABLE_REALTIME_CHAT_SAVE and not metadata.get('chat_id', '').startswith(
+                                            'channel:'
+                                        ):
                                             # Save message in the database
                                             await Chats.upsert_message_to_chat_by_id_and_message_id(
                                                 metadata['chat_id'],
@@ -4577,6 +4646,8 @@ async def streaming_chat_response_handler(response, ctx):
 
                             except Exception as e:
                                 tool_result = str(e)
+                        else:
+                            tool_result = f'Error: Tool "{tool_function_name}" not found.'
 
                         tool_result, tool_result_files, tool_result_embeds = await process_tool_result(
                             request,
@@ -5097,13 +5168,13 @@ async def streaming_chat_response_handler(response, ctx):
                     }
                 )
 
-                await background_tasks_handler(ctx)
                 ctx['assistant_message'] = {
                     'content': serialize_output(output),
                     'output': output,
                     **({'usage': usage} if usage else {}),
                 }
                 await outlet_filter_handler(ctx)
+                await background_tasks_handler(ctx)
             except asyncio.CancelledError:
                 log.warning('Task was cancelled!')
 

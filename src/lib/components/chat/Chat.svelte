@@ -38,6 +38,7 @@
 		showArtifacts,
 		artifactContents,
 		tools,
+		skills,
 		toolServers,
 		terminalServers,
 		functions,
@@ -99,6 +100,7 @@
 		getTaskIdsByChatId
 	} from '$lib/apis';
 	import { getTools } from '$lib/apis/tools';
+	import { getSkills } from '$lib/apis/skills';
 	import { uploadFile } from '$lib/apis/files';
 	import { createOpenAITextStream } from '$lib/apis/streaming';
 	import { getFunctions } from '$lib/apis/functions';
@@ -157,6 +159,7 @@
 	}
 
 	let selectedToolIds = [];
+	let selectedSkillIds = [];
 	let selectedFilterIds = [];
 	let pendingOAuthTools = [];
 
@@ -215,6 +218,7 @@
 
 		files = [];
 		selectedToolIds = [];
+		selectedSkillIds = [];
 		selectedFilterIds = [];
 		webSearchEnabled = false;
 		imageGenerationEnabled = false;
@@ -250,6 +254,7 @@
 						messageInput?.setText(input.prompt);
 						files = input.files;
 						selectedToolIds = input.selectedToolIds;
+						selectedSkillIds = input.selectedSkillIds ?? [];
 						selectedFilterIds = input.selectedFilterIds;
 						webSearchEnabled = input.webSearchEnabled;
 						imageGenerationEnabled = input.imageGenerationEnabled;
@@ -310,6 +315,7 @@
 
 	const resetInput = async () => {
 		selectedToolIds = [];
+		selectedSkillIds = [];
 		selectedFilterIds = [];
 		pendingOAuthTools = [];
 		webSearchEnabled = false;
@@ -335,6 +341,9 @@
 		}
 		if (!$functions) {
 			functions.set(await getFunctions(localStorage.token));
+		}
+		if (!$skills) {
+			skills.set(await getSkills(localStorage.token));
 		}
 		if (selectedModels.length !== 1 && !atSelectedModel) {
 			return;
@@ -371,6 +380,19 @@
 				selectedToolIds = $settings.tools;
 			} else {
 				selectedToolIds = selectedToolIds.filter((id) => !id.startsWith('direct_server:'));
+			}
+
+			// Set Default Skills
+			if (model?.info?.meta?.skillIds) {
+				selectedSkillIds = [
+					...new Set(
+						[...(model?.info?.meta?.skillIds ?? [])].filter((id) =>
+							($skills ?? []).find((s) => s.id === id && s.is_active)
+						)
+					)
+				];
+			} else {
+				selectedSkillIds = [];
 			}
 
 			// Set Default Filters (Toggleable only)
@@ -837,6 +859,7 @@
 
 				files = [];
 				selectedToolIds = [];
+				selectedSkillIds = [];
 				selectedFilterIds = [];
 				webSearchEnabled = false;
 				imageGenerationEnabled = false;
@@ -849,6 +872,7 @@
 						messageInput?.setText(input.prompt);
 						files = input.files;
 						selectedToolIds = input.selectedToolIds;
+						selectedSkillIds = input.selectedSkillIds ?? [];
 						selectedFilterIds = input.selectedFilterIds;
 						webSearchEnabled = input.webSearchEnabled;
 						imageGenerationEnabled = input.imageGenerationEnabled;
@@ -2167,22 +2191,24 @@
 		if (primaryModel && primaryResponseMessageId) {
 			const chatEventEmitter = await getChatEventEmitter(primaryModel.id, _chatId);
 
-			scrollToBottom();
-			await sendMessageSocket(
-				primaryModel,
-				messages && messages.length > 0
-					? messages
-					: createMessagesList(_history, primaryResponseMessageId),
-				_history,
-				primaryResponseMessageId,
-				_chatId,
-				{
-					messageIdsMap: selectedModelIds.length > 1 ? messageIdsMap : undefined,
-					regenerationPrompt
-				}
-			);
-
-			if (chatEventEmitter) clearInterval(chatEventEmitter);
+			try {
+				scrollToBottom();
+				await sendMessageSocket(
+					primaryModel,
+					messages && messages.length > 0
+						? messages
+						: createMessagesList(_history, primaryResponseMessageId),
+					_history,
+					primaryResponseMessageId,
+					_chatId,
+					{
+						messageIdsMap: selectedModelIds.length > 1 ? messageIdsMap : undefined,
+						regenerationPrompt
+					}
+				);
+			} finally {
+				if (chatEventEmitter) clearInterval(chatEventEmitter);
+			}
 		}
 	};
 
@@ -2536,11 +2562,15 @@
 
 		// Parse skill mentions (<$skillId|label>) from user messages
 		const skillMentionRegex = /<\$([^|>]+)\|?[^>]*>/g;
-		const skillIds = [];
+		const skillIds = [...selectedSkillIds];
+		const mentionSkillIds = [];
 		for (const message of messages) {
 			const content =
 				typeof message.content === 'string' ? message.content : (message.content?.[0]?.text ?? '');
 			for (const match of content.matchAll(skillMentionRegex)) {
+				if (!mentionSkillIds.includes(match[1])) {
+					mentionSkillIds.push(match[1]);
+				}
 				if (!skillIds.includes(match[1])) {
 					skillIds.push(match[1]);
 				}
@@ -2548,7 +2578,7 @@
 		}
 
 		// Strip skill mentions from message content
-		if (skillIds.length > 0) {
+		if (mentionSkillIds.length > 0) {
 			messages = messages.map((message) => {
 				if (typeof message.content === 'string') {
 					return {
@@ -3011,6 +3041,9 @@
 
 	const saveControls = async () => {
 		if (!$chatId || $temporaryChatEnabled) return;
+		const loaded = chat?.chat ?? {};
+		if (equal(params, loaded.params ?? {}) && equal(chatFiles, loaded.files ?? [])) return;
+
 		await updateChatById(localStorage.token, $chatId, { params, files: chatFiles }).catch((err) =>
 			console.error('[controls autosave]', err)
 		);
@@ -3292,6 +3325,7 @@
 									bind:prompt
 									bind:autoScroll
 									bind:selectedToolIds
+									bind:selectedSkillIds
 									bind:selectedFilterIds
 									bind:imageGenerationEnabled
 									bind:codeInterpreterEnabled
@@ -3373,6 +3407,7 @@
 									bind:prompt
 									bind:autoScroll
 									bind:selectedToolIds
+									bind:selectedSkillIds
 									bind:selectedFilterIds
 									bind:imageGenerationEnabled
 									bind:codeInterpreterEnabled

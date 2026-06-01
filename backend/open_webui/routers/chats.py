@@ -30,6 +30,7 @@ from open_webui.models.folders import Folders
 from open_webui.models.shared_chats import SharedChatResponse, SharedChats
 from open_webui.models.tags import TagModel, Tags
 from open_webui.socket.main import get_event_emitter
+from open_webui.tasks import stop_item_tasks
 from open_webui.utils.access_control import filter_allowed_access_grants, has_permission
 from open_webui.utils.auth import get_admin_user, get_verified_user
 from open_webui.utils.middleware import serialize_output
@@ -513,9 +514,13 @@ async def delete_all_user_chats(
 
 @router.get('/list/user/{user_id}', response_model=list[ChatTitleIdResponse])
 async def get_user_chat_list_by_user_id(
-    user_id: str, page: int | None = None, query: str | None = None,
-    order_by: str | None = None, direction: str | None = None,
-    user=Depends(get_admin_user), db: AsyncSession = Depends(get_async_session),
+    user_id: str,
+    page: int | None = None,
+    query: str | None = None,
+    order_by: str | None = None,
+    direction: str | None = None,
+    user=Depends(get_admin_user),
+    db: AsyncSession = Depends(get_async_session),
 ):
     """List chat summaries for a given user (admin-only endpoint)."""
     if not ENABLE_ADMIN_CHAT_ACCESS:
@@ -968,12 +973,15 @@ async def update_chat_by_id(
     if chat:
         updated_chat = {**chat.chat, **form_data.chat}
 
-        # Re-derive content from output for assistant messages so that
-        # frontend edits to output items are always reflected in content.
-        # serialize_output() is the single source of truth for this conversion.
-        for msg in updated_chat.get('history', {}).get('messages', {}).values():
+        # Re-derive content from output for assistant messages so that frontend
+        # edits to output items are reflected in content. Only when output
+        # actually changed — otherwise content set independently of output
+        # (e.g. a `replace` event or an outlet filter footer) would be reverted.
+        existing_messages = (chat.chat.get('history') or {}).get('messages') or {}
+        for msg_id, msg in updated_chat.get('history', {}).get('messages', {}).items():
             if msg.get('role') == 'assistant' and msg.get('output'):
-                msg['content'] = serialize_output(msg['output'])
+                if msg.get('output') != existing_messages.get(msg_id, {}).get('output'):
+                    msg['content'] = serialize_output(msg['output'])
 
         chat = await Chats.update_chat_by_id(id, updated_chat, db=db)
 
@@ -1113,6 +1121,10 @@ async def delete_chat_by_id(
     user=Depends(get_verified_user),
     db: AsyncSession = Depends(get_async_session),
 ):
+    # Cancel any in-flight LLM tasks (streaming, title/tags generation)
+    # before deleting the chat to prevent orphaned requests.
+    await stop_item_tasks(request.app.state.redis, id)
+
     if user.role == 'admin':
         chat = await Chats.get_chat_by_id(id, db=db)
         if not chat:
@@ -1302,13 +1314,20 @@ async def clone_shared_chat_by_id(
 
 
 @router.post('/{id}/archive', response_model=ChatResponse | None)
-async def archive_chat_by_id(id: str, user=Depends(get_verified_user), db: AsyncSession = Depends(get_async_session)):
+async def archive_chat_by_id(
+    request: Request,
+    id: str,
+    user=Depends(get_verified_user),
+    db: AsyncSession = Depends(get_async_session),
+):
     chat = await Chats.get_chat_by_id_and_user_id(id, user.id, db=db)
     if chat:
         chat = await Chats.toggle_chat_archive_by_id(id, db=db)
 
         tag_ids = chat.meta.get('tags', [])
         if chat.archived:
+            # Cancel any in-flight LLM tasks before archiving
+            await stop_item_tasks(request.app.state.redis, id)
             # Archived chats are excluded from count — clean up orphans
             await Chats.delete_orphan_tags_for_user(tag_ids, user.id, db=db)
         else:

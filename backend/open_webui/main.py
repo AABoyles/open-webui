@@ -289,6 +289,7 @@ from open_webui.config import (
     MOJEEK_SEARCH_API_KEY,
     OAUTH_ADMIN_ROLES,
     OAUTH_ALLOWED_ROLES,
+    OAUTH_AUTO_REDIRECT,
     OAUTH_EMAIL_CLAIM,
     OAUTH_PICTURE_CLAIM,
     OAUTH_PROVIDERS,
@@ -469,8 +470,11 @@ from open_webui.env import (
     WEBUI_SESSION_COOKIE_SECURE,
 )
 from open_webui.internal.db import ScopedSession, engine, get_async_session
+from open_webui.models.access_grants import AccessGrants
+from open_webui.models.channels import Channels
 from open_webui.models.chats import ChatForm, Chats
 from open_webui.models.functions import Functions
+from open_webui.models.messages import Messages
 from open_webui.models.models import Models
 from open_webui.models.users import UserModel, Users
 from open_webui.routers import (
@@ -608,7 +612,7 @@ class SPAStaticFiles(StaticFiles):
 
 
 if LOG_FORMAT != 'json':
-    print(rf"""
+    banner = rf"""
  ██████╗ ██████╗ ███████╗███╗   ██╗    ██╗    ██╗███████╗██████╗ ██╗   ██╗██╗
 ██╔═══██╗██╔══██╗██╔════╝████╗  ██║    ██║    ██║██╔════╝██╔══██╗██║   ██║██║
 ██║   ██║██████╔╝█████╗  ██╔██╗ ██║    ██║ █╗ ██║█████╗  ██████╔╝██║   ██║██║
@@ -620,7 +624,12 @@ if LOG_FORMAT != 'json':
 v{VERSION} - building the best AI user interface.
 {f'Commit: {WEBUI_BUILD_HASH}' if WEBUI_BUILD_HASH != 'dev-build' else ''}
 https://github.com/open-webui/open-webui
-""")
+"""
+    try:
+        print(banner)
+    except UnicodeEncodeError:
+        # Stdout can't encode the box-drawing banner (Windows cp1252, redirected/headless stdout); fall back to ASCII.
+        print(f'Open WebUI v{VERSION} - building the best AI user interface.\nhttps://github.com/open-webui/open-webui')
 
 
 @asynccontextmanager
@@ -859,6 +868,7 @@ app.state.BASE_MODELS = []
 app.state.config.WEBUI_URL = WEBUI_URL
 app.state.config.ENABLE_SIGNUP = ENABLE_SIGNUP
 app.state.config.ENABLE_LOGIN_FORM = ENABLE_LOGIN_FORM
+app.state.config.OAUTH_AUTO_REDIRECT = OAUTH_AUTO_REDIRECT
 app.state.config.ENABLE_PASSWORD_CHANGE_FORM = ENABLE_PASSWORD_CHANGE_FORM
 
 app.state.config.ENABLE_API_KEYS = ENABLE_API_KEYS
@@ -1795,6 +1805,44 @@ async def chat_completion(
 
         if metadata.get('chat_id') and user:
             chat_id = metadata['chat_id']
+
+            # Gate channel: branch — caller needs write access on the channel
+            # and the supplied message_id must belong to that channel.
+            if chat_id.startswith('channel:'):
+                channel_id = chat_id.removeprefix('channel:')
+                channel = await Channels.get_channel_by_id(channel_id)
+                if not channel:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail=ERROR_MESSAGES.NOT_FOUND,
+                    )
+                if user.role != 'admin':
+                    if channel.type in ['group', 'dm']:
+                        if not await Channels.is_user_channel_member(channel.id, user.id):
+                            raise HTTPException(
+                                status_code=status.HTTP_403_FORBIDDEN,
+                                detail=ERROR_MESSAGES.DEFAULT(),
+                            )
+                    else:
+                        if not await AccessGrants.has_access(
+                            user_id=user.id,
+                            resource_type='channel',
+                            resource_id=channel.id,
+                            permission='write',
+                        ):
+                            raise HTTPException(
+                                status_code=status.HTTP_403_FORBIDDEN,
+                                detail=ERROR_MESSAGES.DEFAULT(),
+                            )
+                target_message_id = list(message_ids.values())[0] if message_ids else None
+                if target_message_id:
+                    target_message = await Messages.get_message_by_id(target_message_id)
+                    if target_message and target_message.channel_id != channel.id:
+                        raise HTTPException(
+                            status_code=status.HTTP_403_FORBIDDEN,
+                            detail=ERROR_MESSAGES.DEFAULT(),
+                        )
+
             if not chat_id.startswith('local:') and not chat_id.startswith(
                 'channel:'
             ):  # temporary/channel chats are not stored
@@ -2013,7 +2061,9 @@ async def chat_completion(
             if metadata.get('chat_id') and metadata.get('message_id'):
                 # Update the chat message with the error
                 try:
-                    if not metadata.get('chat_id', '').startswith('local:') and not metadata.get('chat_id', '').startswith('channel:'):
+                    if not metadata.get('chat_id', '').startswith('local:') and not metadata.get(
+                        'chat_id', ''
+                    ).startswith('channel:'):
                         await Chats.upsert_message_to_chat_by_id_and_message_id(
                             metadata['chat_id'],
                             metadata['message_id'],
@@ -2352,7 +2402,10 @@ async def get_app_config(request: Request):
         'name': app.state.WEBUI_NAME,
         'version': VERSION,
         'default_locale': str(DEFAULT_LOCALE),
-        'oauth': {'providers': {name: config.get('name', name) for name, config in OAUTH_PROVIDERS.items()}},
+        'oauth': {
+            'providers': {name: config.get('name', name) for name, config in OAUTH_PROVIDERS.items()},
+            'auto_redirect': app.state.config.OAUTH_AUTO_REDIRECT,
+        },
         'features': {
             # --- Public: required by login/signup page pre-auth ---
             'auth': WEBUI_AUTH,
@@ -2918,6 +2971,8 @@ async def check_db_health():
     """Verify database connectivity by issuing a lightweight ping."""
     await async_db_ping()
     return {'status': True}
+
+
 # --- static assets & files ---
 # Serve build-time static assets (CSS, JS, images, favicon, etc.)
 app.mount('/static', StaticFiles(directory=STATIC_DIR), name='static')
@@ -2935,7 +2990,10 @@ async def serve_cache_file(
     XSS from user-generated HTML stored in the cache directory.
     """
     file_path = os.path.abspath(os.path.join(CACHE_DIR, path))
-    if not file_path.startswith(os.path.abspath(CACHE_DIR)):
+    # trailing os.sep is required: without it, a path resolving to a sibling
+    # whose name starts with the cache-dir basename (e.g. cache_backup) passes
+    cache_root = os.path.abspath(CACHE_DIR) + os.sep
+    if not file_path.startswith(cache_root):
         raise HTTPException(status_code=404, detail='File not found')
     if not os.path.isfile(file_path):
         raise HTTPException(status_code=404, detail='File not found')

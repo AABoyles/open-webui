@@ -239,8 +239,11 @@ async def get_prompt_by_id(
 
 @router.post('/id/{prompt_id}/update', response_model=PromptModel | None)
 async def update_prompt_by_id(
-    request: Request, prompt_id: str, form_data: PromptForm,
-    user=Depends(get_verified_user), db: AsyncSession = Depends(get_async_session),
+    request: Request,
+    prompt_id: str,
+    form_data: PromptForm,
+    user=Depends(get_verified_user),
+    db: AsyncSession = Depends(get_async_session),
 ):
     """Update a prompt's content, creating a new history entry if changed."""
     prompt = await Prompts.get_prompt_by_id(prompt_id, db=db)
@@ -653,7 +656,7 @@ async def delete_prompt_history_entry(
             detail='Cannot delete the active production version',
         )
 
-    success = await PromptHistories.delete_history_entry(history_id, db=db)
+    success = await PromptHistories.delete_history_entry(history_id, prompt.id, db=db)
     if not success:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -697,7 +700,7 @@ async def get_prompt_diff(
             detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
         )
 
-    diff = await PromptHistories.compute_diff(from_id, to_id, db=db)
+    diff = await PromptHistories.compute_diff(from_id, to_id, prompt.id, db=db)
     if not diff:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

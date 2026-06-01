@@ -6,6 +6,7 @@ import json
 import logging
 import time
 import uuid
+
 # local imports
 from open_webui.internal.db import Base, JSONField, get_async_db_context
 from open_webui.models.automations import AutomationRun
@@ -357,6 +358,21 @@ class ChatTable:
         db: AsyncSession | None = None,
     ) -> list[ChatModel]:
         async with get_async_db_context(db) as session:
+            # Validate folder_id references — clear any that don't exist
+            folder_ids = {f.folder_id for f in chat_import_forms if f.folder_id}
+            existing = set()
+            for fid in folder_ids:
+                if await Folders.get_folder_by_id_and_user_id(fid, user_id, db=session):
+                    existing.add(fid)
+
+            cleared = 0
+            for form in chat_import_forms:
+                if form.folder_id and form.folder_id not in existing:
+                    form.folder_id = None
+                    cleared += 1
+            if cleared:
+                log.info('Import: cleared %d dangling folder_id(s) for user %s', cleared, user_id)
+
             chats = []
 
             for form_data in chat_import_forms:
@@ -385,7 +401,10 @@ class ChatTable:
             return [ChatModel.model_validate(chat) for chat in chats]
 
     async def update_chat_by_id(
-        self, id: str, chat: dict, db: AsyncSession | None = None,
+        self,
+        id: str,
+        chat: dict,
+        db: AsyncSession | None = None,
     ) -> ChatModel | None:
         """Persist updated chat content, sanitizing null bytes."""
         try:  # load the chat record for in-place mutation
@@ -495,9 +514,7 @@ class ChatTable:
             except Exception as e:
                 log.warning('Backfill failed for message %s in chat %s: %s', message_id, chat_id, e)
 
-    async def reconcile_messages_by_chat_id(
-        self, chat_id: str, user_id: str, messages: dict[str, dict]
-    ) -> None:
+    async def reconcile_messages_by_chat_id(self, chat_id: str, user_id: str, messages: dict[str, dict]) -> None:
         """Sync ``chat_message`` rows with the committed JSON blob.
 
         Upserts current messages via ``backfill_messages_by_chat_id``
@@ -675,9 +692,12 @@ class ChatTable:
             await session.commit()
             await session.refresh(chat)
             return ChatModel.model_validate(chat)  # return the updated original
+
     # refresh helper
     async def update_shared_chat_by_chat_id(
-        self, chat_id: str, db: AsyncSession | None = None,
+        self,
+        chat_id: str,
+        db: AsyncSession | None = None,
     ) -> ChatModel | None:
         """Refresh the shared snapshot with current chat content."""
         from open_webui.models.shared_chats import SharedChats
@@ -696,7 +716,7 @@ class ChatTable:
         from open_webui.models.shared_chats import SharedChats
 
         try:
-            return await SharedChats.delete_by_chat_id(chat_id, db=session)
+            return await SharedChats.delete_by_chat_id(chat_id, db=db)
         except Exception:
             return False
 
@@ -820,7 +840,7 @@ class ChatTable:
         """Delegate to SharedChats for listing shared chats by user."""
         from open_webui.models.shared_chats import SharedChats
 
-        return await SharedChats.get_by_user_id(user_id, filter=filter, skip=skip, limit=limit, db=session)
+        return await SharedChats.get_by_user_id(user_id, filter=filter, skip=skip, limit=limit, db=db)
 
     async def get_chat_list_by_user_id(
         self,
@@ -936,9 +956,12 @@ class ChatTable:
             )
             all_chats = result.scalars().all()
             return [ChatModel.model_validate(chat) for chat in all_chats]
+
     # retrieve conversation
     async def get_chat_by_id(
-        self, id: str, db: AsyncSession | None = None,
+        self,
+        id: str,
+        db: AsyncSession | None = None,
     ) -> ChatModel | None:
         """Fetch a chat by PK, auto-sanitizing null bytes on read."""
         try:
@@ -960,7 +983,7 @@ class ChatTable:
         from open_webui.models.shared_chats import SharedChats
 
         try:
-            shared = await SharedChats.get_by_id(id, db=session)
+            shared = await SharedChats.get_by_id(id, db=db)
             if shared:
                 # Return a ChatModel-compatible view of the snapshot
                 return ChatModel(
@@ -1017,6 +1040,7 @@ class ChatTable:
             result = await session.execute(select(Chat).order_by(Chat.updated_at.desc()))
             all_chats = result.scalars().all()
             return [ChatModel.model_validate(chat) for chat in all_chats]
+
     # list user conversations
     async def get_chats_by_user_id(
         self,
@@ -1065,6 +1089,7 @@ class ChatTable:
                     'total': total,
                 }
             )
+
     # list pinned chats
     async def get_pinned_chats_by_user_id(
         self, user_id: str, db: AsyncSession | None = None
@@ -1095,6 +1120,7 @@ class ChatTable:
                 select(Chat).filter_by(user_id=user_id, archived=True).order_by(Chat.updated_at.desc())
             )
             return [ChatModel.model_validate(chat) for chat in result.scalars().all()]
+
     # search user conversations
     async def get_chats_by_user_id_and_search_text(
         self,
@@ -1422,7 +1448,7 @@ class ChatTable:
         self, id: str, user_id: str, tag_name: str, db: AsyncSession | None = None
     ) -> ChatModel | None:
         tag_id = tag_name.replace(' ', '_').lower()
-        await Tags.ensure_tags_exist([tag_name], user_id, db=session)
+        await Tags.ensure_tags_exist([tag_name], user_id, db=db)
         try:
             async with get_async_db_context(db) as session:
                 chat = await session.get(Chat, id)
