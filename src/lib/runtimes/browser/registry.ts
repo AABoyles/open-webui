@@ -3,6 +3,30 @@ import { BROWSER_MODEL_PREFIX } from './types';
 
 export const BROWSER_MODEL_ENTRIES: BrowserModelEntry[] = [
 	{
+		id: BROWSER_MODEL_PREFIX + 'mediapipe-Gemma3-1B',
+		name: 'Gemma 3 1B (MediaPipe)',
+		runtime: 'mediapipe',
+		modelUrl: 'https://huggingface.co/litert-community/Gemma3-1B-IT/resolve/main/gemma3-1b-it-int4-web.task',
+		maxTokens: 1024,
+		approxVramMb: 700
+	},
+	{
+		id: BROWSER_MODEL_PREFIX + 'mediapipe-Gemma4-E2B',
+		name: 'Gemma 4 E2B (MediaPipe)',
+		runtime: 'mediapipe',
+		modelUrl: 'https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it-web.task',
+		maxTokens: 1024,
+		approxVramMb: 2000
+	},
+	{
+		id: BROWSER_MODEL_PREFIX + 'mediapipe-Gemma4-E4B',
+		name: 'Gemma 4 E4B (MediaPipe)',
+		runtime: 'mediapipe',
+		modelUrl: 'https://huggingface.co/litert-community/gemma-4-E4B-it-litert-lm/resolve/main/gemma-4-E4B-it-web.task',
+		maxTokens: 1024,
+		approxVramMb: 3000
+	},
+	{
 		id: BROWSER_MODEL_PREFIX + 'Bonsai-1.7B-ONNX',
 		name: 'Bonsai 1.7B',
 		runtime: 'transformers',
@@ -11,7 +35,7 @@ export const BROWSER_MODEL_ENTRIES: BrowserModelEntry[] = [
 	},
 	{
 		id: BROWSER_MODEL_PREFIX + 'wllama-DeepSeek-R1-1.5B-Q4_K_M',
-		name: 'DeepSeek R1 1.5B Q4 (wllama)',
+		name: 'DeepSeek R1 1.5B',
 		runtime: 'wllama',
 		hfRepo: 'bartowski/DeepSeek-R1-Distill-Qwen-1.5B-GGUF',
 		quant: 'Q4_K_M',
@@ -72,7 +96,7 @@ export const BROWSER_MODEL_ENTRIES: BrowserModelEntry[] = [
 	},
 	{
 		id: BROWSER_MODEL_PREFIX + 'wllama-Llama-3.2-1B-Q4_K_M',
-		name: 'Llama 3.2 1B Q4 (wllama)',
+		name: 'Llama 3.2 1B',
 		runtime: 'wllama',
 		hfRepo: 'bartowski/Llama-3.2-1B-Instruct-GGUF',
 		quant: 'Q4_K_M',
@@ -87,7 +111,7 @@ export const BROWSER_MODEL_ENTRIES: BrowserModelEntry[] = [
 	},
 	{
 		id: BROWSER_MODEL_PREFIX + 'wllama-Llama-3.2-3B-Q4_K_M',
-		name: 'Llama 3.2 3B Q4 (wllama)',
+		name: 'Llama 3.2 3B',
 		runtime: 'wllama',
 		hfRepo: 'bartowski/Llama-3.2-3B-Instruct-GGUF',
 		quant: 'Q4_K_M',
@@ -146,7 +170,7 @@ export const BROWSER_MODEL_ENTRIES: BrowserModelEntry[] = [
 	},
 	{
 		id: BROWSER_MODEL_PREFIX + 'wllama-Qwen3-0.6B-Q4_K_M',
-		name: 'Qwen3 0.6B Q4 (wllama)',
+		name: 'Qwen3 0.6B',
 		runtime: 'wllama',
 		hfRepo: 'bartowski/Qwen_Qwen3-0.6B-GGUF',
 		quant: 'Q4_K_M',
@@ -154,7 +178,7 @@ export const BROWSER_MODEL_ENTRIES: BrowserModelEntry[] = [
 	},
 	{
 		id: BROWSER_MODEL_PREFIX + 'wllama-Qwen3-1.7B-Q4_K_M',
-		name: 'Qwen3 1.7B Q4 (wllama)',
+		name: 'Qwen3 1.7B',
 		runtime: 'wllama',
 		hfRepo: 'bartowski/Qwen_Qwen3-1.7B-GGUF',
 		quant: 'Q4_K_M',
@@ -169,7 +193,7 @@ export const BROWSER_MODEL_ENTRIES: BrowserModelEntry[] = [
 	},
 	{
 		id: BROWSER_MODEL_PREFIX + 'wllama-Qwen3-4B-Q4_K_M',
-		name: 'Qwen3 4B Q4 (wllama)',
+		name: 'Qwen3 4B',
 		runtime: 'wllama',
 		hfRepo: 'bartowski/Qwen_Qwen3-4B-GGUF',
 		quant: 'Q4_K_M',
@@ -220,10 +244,46 @@ export const BROWSER_MODEL_ENTRIES: BrowserModelEntry[] = [
 		hfModelId: 'onnx-community/Ternary-Bonsai-1.7B-ONNX',
 		approxVramMb: 450,
 		dtype: 'q2'
+	},
+	// ── LiteRT-LM ──────────────────────────────────────────────────────────────
+	// Uses .litertlm files (distinct from the .task files used by MediaPipe).
+	{
+		id: BROWSER_MODEL_PREFIX + 'litert-Gemma4-E2B',
+		name: 'Gemma 4 E2B (LiteRT)',
+		runtime: 'litert',
+		modelUrl: 'https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it-web.litertlm',
+		maxNumTokens: 8192,
+		approxVramMb: 2000
+	},
+	{
+		id: BROWSER_MODEL_PREFIX + 'litert-Gemma4-E4B',
+		name: 'Gemma 4 E4B (LiteRT)',
+		runtime: 'litert',
+		modelUrl: 'https://huggingface.co/litert-community/gemma-4-E4B-it-litert-lm/resolve/main/gemma-4-E4B-it-web.litertlm',
+		maxNumTokens: 8192,
+		approxVramMb: 3000
+	},
+	// ── Chrome Prompt API ───────────────────────────────────────────────────────
+	// Uses Chrome's built-in on-device model — no download required once Chrome
+	// has the model. Only shown when LanguageModel is available in globalThis.
+	{
+		id: BROWSER_MODEL_PREFIX + 'prompt-api',
+		name: 'Chrome Built-in AI',
+		runtime: 'prompt-api',
+		approxVramMb: 0
 	}
 ];
 
 const entriesById = new Map(BROWSER_MODEL_ENTRIES.map((e) => [e.id, e]));
+
+const RUNTIME_DISPLAY_NAME: Record<string, string> = {
+	webllm: 'WebLLM',
+	transformers: 'Transformers.js',
+	wllama: 'wllama',
+	mediapipe: 'MediaPipe',
+	litert: 'LiteRT-LM',
+	'prompt-api': 'Chrome AI'
+};
 
 export const getBrowserModelEntry = (id: string): BrowserModelEntry | undefined =>
 	entriesById.get(id);
@@ -235,9 +295,15 @@ export const browserModelsAsModels = () =>
 		owned_by: 'openai' as const,
 		openai: { id: entry.id },
 		browser: true,
+		tags: [
+			{ name: 'browser' },
+			{ name: RUNTIME_DISPLAY_NAME[entry.runtime] ?? entry.runtime }
+		],
 		info: {
 			meta: {
-				description: `Runs entirely in your browser (~${entry.approxVramMb} MB VRAM). First use downloads the model; subsequent loads are cached.`,
+				description: entry.runtime === 'prompt-api'
+					? 'Uses Chrome\'s built-in on-device model. Requires Chrome 131+ with AI features enabled.'
+					: `Runs entirely in your browser (~${entry.approxVramMb} MB VRAM). First use downloads the model; subsequent loads are cached.`,
 				capabilities: {
 					vision: entry.vision === true,
 					usage: false,

@@ -4,11 +4,14 @@ import type { BrowserChatOptions, BrowserRuntimeAdapter } from './adapters/share
 import { webllmAdapter } from './adapters/webllm';
 import { transformersAdapter } from './adapters/transformers';
 import { wllamaAdapter } from './adapters/wllama';
+import { mediapipeAdapter } from './adapters/mediapipe';
+import { litertAdapter } from './adapters/litert';
+import { promptApiAdapter } from './adapters/prompt-api';
 
 // Re-exports — Chat.svelte and apis/index.ts only import from this barrel.
 export { BROWSER_MODEL_ENTRIES, browserModelsAsModels, getBrowserModelEntry } from './registry';
-export { isBrowserModelId, BROWSER_MODEL_PREFIX } from './types';
-export type { BrowserModelEntry, BrowserRuntimeId, WebLLMModelEntry, TransformersModelEntry, WllamaModelEntry } from './types';
+export { isBrowserModelId, BROWSER_MODEL_PREFIX, WEBGPU_RUNTIMES } from './types';
+export type { BrowserModelEntry, BrowserRuntimeId, WebLLMModelEntry, TransformersModelEntry, WllamaModelEntry, MediaPipeModelEntry, LiteRTModelEntry, PromptAPIModelEntry } from './types';
 export type { BrowserChatOptions, BrowserRuntimeAdapter } from './adapters/shared';
 
 // `satisfies` forces this map to cover every BrowserRuntimeId — adding a new
@@ -16,7 +19,10 @@ export type { BrowserChatOptions, BrowserRuntimeAdapter } from './adapters/share
 const ADAPTERS = {
 	webllm: webllmAdapter,
 	transformers: transformersAdapter,
-	wllama: wllamaAdapter
+	wllama: wllamaAdapter,
+	mediapipe: mediapipeAdapter,
+	litert: litertAdapter,
+	'prompt-api': promptApiAdapter
 } satisfies Record<BrowserRuntimeId, BrowserRuntimeAdapter<any>>;
 
 function pickAdapter(entry: BrowserModelEntry): BrowserRuntimeAdapter<any> {

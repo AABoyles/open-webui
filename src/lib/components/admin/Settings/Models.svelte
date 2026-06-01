@@ -20,6 +20,7 @@
 	import { updateUserSettings } from '$lib/apis/users';
 
 	import { getModels } from '$lib/apis';
+	import { browserModelsAsModels } from '$lib/runtimes/browser/registry';
 	import Search from '$lib/components/icons/Search.svelte';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
 	import Switch from '$lib/components/common/Switch.svelte';
@@ -177,6 +178,13 @@
 
 		workspaceModels = await getBaseModels(localStorage.token);
 		baseModels = await getModels(localStorage.token, null, true);
+
+		// Include all browser/local models (no VRAM filtering for admin view).
+		const browserModels = browserModelsAsModels();
+		const existingIds = new Set(baseModels.map((m) => m.id));
+		for (const m of browserModels) {
+			if (!existingIds.has(m.id)) baseModels.push(m);
+		}
 
 		models = baseModels.map((m) => {
 			const workspaceModel = workspaceModels.find((wm) => wm.id === m.id);

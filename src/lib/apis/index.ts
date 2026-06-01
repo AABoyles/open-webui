@@ -2,6 +2,7 @@ import { WEBUI_BASE_URL } from '$lib/constants';
 import { convertOpenApiToToolPayload } from '$lib/utils';
 import { getOpenAIModelsDirect } from './openai';
 import { browserModelsAsModels, getBrowserModelEntry } from '$lib/runtimes/browser/registry';
+import { WEBGPU_RUNTIMES } from '$lib/runtimes/browser/types';
 
 const TOOL_SERVER_FETCH_TIMEOUT = 10000;
 
@@ -177,6 +178,7 @@ export const getModels = async (
 		const browserModels = browserModelsAsModels();
 		const existingIds = new Set(models.map((m: any) => m.id));
 		const webgpuAvailable = typeof navigator !== 'undefined' && !!(navigator as any).gpu;
+		const promptApiAvailable = typeof (globalThis as any).LanguageModel !== 'undefined';
 
 		// Estimate available VRAM using navigator.deviceMemory (Chrome/Edge; capped at 8 by spec).
 		// Use half of reported system RAM as a conservative VRAM budget — reliable only for
@@ -192,8 +194,10 @@ export const getModels = async (
 		for (const m of browserModels) {
 			if (existingIds.has(m.id)) continue;
 			const entry = getBrowserModelEntry(m.id);
-			// WebLLM models are WebGPU-only compiled bytecode — hide them on devices without WebGPU.
-			if (!webgpuAvailable && entry?.runtime === 'webllm') continue;
+			// Hide models whose runtime requires WebGPU on devices that don't have it.
+			if (!webgpuAvailable && entry && WEBGPU_RUNTIMES.has(entry.runtime)) continue;
+			// Hide the Chrome Prompt API model when LanguageModel is not exposed.
+			if (!promptApiAvailable && entry?.runtime === 'prompt-api') continue;
 			// Hide models whose VRAM requirement exceeds the estimated available budget.
 			if (vramBudgetMb !== null && (entry?.approxVramMb ?? 0) > vramBudgetMb) continue;
 			models.push(m);

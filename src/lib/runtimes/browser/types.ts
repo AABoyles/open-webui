@@ -1,5 +1,7 @@
-export type BrowserRuntimeId = 'webllm' | 'transformers' | 'wllama';
-// Extended as adapters are added: 'webllm' | 'transformers' | 'wllama' | 'mediapipe'.
+export type BrowserRuntimeId = 'webllm' | 'transformers' | 'wllama' | 'mediapipe' | 'litert' | 'prompt-api';
+
+/** Runtimes that require WebGPU — models using these are hidden when navigator.gpu is absent. */
+export const WEBGPU_RUNTIMES = new Set<BrowserRuntimeId>(['webllm', 'mediapipe', 'litert']);
 
 export const BROWSER_MODEL_PREFIX = 'browser:';
 
@@ -38,6 +40,36 @@ export interface WllamaModelEntry extends BaseEntry {
 	contextSize?: number; // n_ctx passed to llama.cpp (default 4096)
 }
 
-// Discriminated union — extend with MediaPipeModelEntry when that adapter lands.
-// TypeScript narrowing on `entry.runtime` gives each adapter the right per-runtime fields.
-export type BrowserModelEntry = WebLLMModelEntry | TransformersModelEntry | WllamaModelEntry;
+export interface MediaPipeModelEntry extends BaseEntry {
+	runtime: 'mediapipe';
+	/** URL to the .task or .litertlm model file (e.g. a HuggingFace resolve URL). */
+	modelUrl: string;
+	/** Chat prompt template — only 'gemma' is supported today. */
+	chatTemplate?: 'gemma';
+	/** Max combined input+output tokens (default 1024). */
+	maxTokens?: number;
+	/** Top-K sampling (default 40). */
+	topK?: number;
+}
+
+export interface LiteRTModelEntry extends BaseEntry {
+	runtime: 'litert';
+	/** URL to the .litertlm model file (e.g. a HuggingFace resolve URL). */
+	modelUrl: string;
+	/** Max combined input+output tokens passed to the engine (default 8192). */
+	maxNumTokens?: number;
+}
+
+export interface PromptAPIModelEntry extends BaseEntry {
+	runtime: 'prompt-api';
+	// No model URL — uses Chrome's built-in on-device model.
+}
+
+// Discriminated union — TypeScript narrowing on `entry.runtime` gives each adapter the right per-runtime fields.
+export type BrowserModelEntry =
+	| WebLLMModelEntry
+	| TransformersModelEntry
+	| WllamaModelEntry
+	| MediaPipeModelEntry
+	| LiteRTModelEntry
+	| PromptAPIModelEntry;
