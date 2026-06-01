@@ -177,10 +177,25 @@ export const getModels = async (
 		const browserModels = browserModelsAsModels();
 		const existingIds = new Set(models.map((m: any) => m.id));
 		const webgpuAvailable = typeof navigator !== 'undefined' && !!(navigator as any).gpu;
+
+		// Estimate available VRAM using navigator.deviceMemory (Chrome/Edge; capped at 8 by spec).
+		// Use half of reported system RAM as a conservative VRAM budget — reliable only for
+		// low-memory devices. At 8 GB the spec caps the value, so we can't distinguish 8 GB
+		// from 64 GB; skip filtering above that threshold to avoid hiding models on high-end machines.
+		const deviceMemoryGb: number | undefined =
+			typeof navigator !== 'undefined' ? (navigator as any).deviceMemory : undefined;
+		const vramBudgetMb: number | null =
+			typeof deviceMemoryGb === 'number' && deviceMemoryGb < 8
+				? deviceMemoryGb * 0.5 * 1024
+				: null;
+
 		for (const m of browserModels) {
 			if (existingIds.has(m.id)) continue;
+			const entry = getBrowserModelEntry(m.id);
 			// WebLLM models are WebGPU-only compiled bytecode — hide them on devices without WebGPU.
-			if (!webgpuAvailable && getBrowserModelEntry(m.id)?.runtime === 'webllm') continue;
+			if (!webgpuAvailable && entry?.runtime === 'webllm') continue;
+			// Hide models whose VRAM requirement exceeds the estimated available budget.
+			if (vramBudgetMb !== null && (entry?.approxVramMb ?? 0) > vramBudgetMb) continue;
 			models.push(m);
 		}
 	}
