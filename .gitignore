@@ -311,3 +311,4 @@ cypress/videos
 cypress/screenshots
 .vscode/settings.json
 .dev-backend-data/
+.cptr
