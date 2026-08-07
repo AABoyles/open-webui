@@ -3071,8 +3071,7 @@
 									if (!title) return;
 									await updateChatById(localStorage.token, savedChatId, { title });
 									chatTitle.set(title);
-									currentChatPage.set(1);
-									chats.set(await getChatList(localStorage.token, $currentChatPage));
+									await refreshChatList(localStorage.token);
 								})
 								.catch(console.error);
 						}
@@ -3127,8 +3126,7 @@
 								if (!title) return;
 								await updateChatById(localStorage.token, savedChatId, { title });
 								chatTitle.set(title);
-								currentChatPage.set(1);
-								chats.set(await getChatList(localStorage.token, $currentChatPage));
+								await refreshChatList(localStorage.token);
 							},
 							onError: () => {}
 						}).catch(() => {});
